@@ -125,9 +125,11 @@ public final class PlanGenerator {
         BigDecimal total = BigDecimal.ZERO;
         BigDecimal subsidy = BigDecimal.ZERO;
         for (PlanItem it : activeItems) {
-            BigDecimal line = it.getUnitPrice().multiply(BigDecimal.valueOf(it.getQuantity()));
+            BigDecimal line = lineAmount(it);
             total = total.add(line);
-            subsidy = subsidy.add(it.getSubsidyCap().multiply(BigDecimal.valueOf(it.getQuantity())));
+            // subsidyCap 为「该项单价补贴上限」，补贴额 = 上限 × 数量
+            BigDecimal cap = it.getSubsidyCap() == null ? BigDecimal.ZERO : it.getSubsidyCap();
+            subsidy = subsidy.add(cap.multiply(BigDecimal.valueOf(it.getQuantity())));
         }
         if (subsidy.compareTo(TOTAL_SUBSIDY_CAP) > 0) {
             subsidy = TOTAL_SUBSIDY_CAP;
@@ -136,6 +138,38 @@ public final class PlanGenerator {
             subsidy = total;
         }
         return new Cost(total, subsidy, total.subtract(subsidy));
+    }
+
+    /** 单行总额：有材料/人工拆分时用拆分值，否则回退单价×数量 */
+    public static BigDecimal lineAmount(PlanItem it) {
+        if (it.getMaterialFee() != null || it.getLaborFee() != null) {
+            BigDecimal m = it.getMaterialFee() == null ? BigDecimal.ZERO : it.getMaterialFee();
+            BigDecimal l = it.getLaborFee() == null ? BigDecimal.ZERO : it.getLaborFee();
+            return m.add(l);
+        }
+        return it.getUnitPrice().multiply(BigDecimal.valueOf(it.getQuantity()));
+    }
+
+    /** 方案材料费/人工费汇总 */
+    public static MaterialLabor splitCost(List<PlanItem> activeItems) {
+        BigDecimal material = BigDecimal.ZERO;
+        BigDecimal labor = BigDecimal.ZERO;
+        for (PlanItem it : activeItems) {
+            if (it.getMaterialFee() != null) {
+                material = material.add(it.getMaterialFee());
+                labor = labor.add(it.getLaborFee() == null ? BigDecimal.ZERO : it.getLaborFee());
+            } else {
+                // 无拆分明细时按行金额 80% 材料 / 20% 人工兜底
+                BigDecimal line = lineAmount(it);
+                BigDecimal m = line.multiply(new BigDecimal("0.8")).setScale(2, java.math.RoundingMode.HALF_UP);
+                material = material.add(m);
+                labor = labor.add(line.subtract(m));
+            }
+        }
+        return new MaterialLabor(material, labor);
+    }
+
+    public record MaterialLabor(BigDecimal material, BigDecimal labor) {
     }
 
     public record Cost(BigDecimal total, BigDecimal subsidy, BigDecimal selfPay) {
@@ -197,6 +231,12 @@ public final class PlanGenerator {
         p.setQuantity(1);
         p.setUnitPrice(new BigDecimal(c.price()));
         p.setSubsidyCap(new BigDecimal(c.cap()));
+        // 行级费用拆分：约 80% 材料、20% 人工（演示口径，人工=差额避免尾差）
+        BigDecimal line = new BigDecimal(c.price());
+        BigDecimal material = line.multiply(new BigDecimal("0.8")).setScale(2, java.math.RoundingMode.HALF_UP);
+        p.setMaterialFee(material);
+        p.setLaborFee(line.subtract(material));
+        p.setSource("ASSESSMENT");
         p.setReason(reason);
         p.setConstructionImpact(impact);
         p.setStatus("PROPOSED");

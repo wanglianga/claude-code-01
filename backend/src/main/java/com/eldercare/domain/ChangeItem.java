@@ -8,18 +8,29 @@ import lombok.Setter;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * 变更涉及的项目清单（新增项目 / 材料替代或工艺变更）。
+ * 社区核定时逐项标记 subsidyEligible（是否计入可报销范围）。
+ */
 @Entity
-@Table(name = "plan_item")
+@Table(name = "change_item")
 @Getter
 @Setter
 @NoArgsConstructor
-public class PlanItem {
+public class ChangeItem {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(nullable = false)
+    private Long changeId;
+
+    @Column(nullable = false)
     private Long applicationId;
+
+    /** ADD 新增项目 / REPLACE 材料替代·工艺变更 */
+    @Column(nullable = false)
+    private String itemType;
 
     @Column(nullable = false)
     private String category;
@@ -27,32 +38,21 @@ public class PlanItem {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false, length = 512)
-    private String reason;
-
     private String spec;
     private String unit;
     private Integer quantity = 1;
 
     @Column(nullable = false)
-    private BigDecimal unitPrice;
+    private BigDecimal materialFee = BigDecimal.ZERO;
 
     @Column(nullable = false)
-    private BigDecimal subsidyCap;
+    private BigDecimal laborFee = BigDecimal.ZERO;
 
-    /** 材料费/人工费拆分（行金额，含数量） */
-    private BigDecimal materialFee;
-    private BigDecimal laborFee;
+    @Column(length = 512)
+    private String reason;
 
-    /** 来源: ASSESSMENT 评估生成 / FAMILY 家属新增 / CHANGE 施工变更并入 */
     @Column(nullable = false)
-    private String source = "ASSESSMENT";
-
-    private String constructionImpact;
-
-    /** PROPOSED / ACCEPTED / REMOVED / ADDED */
-    @Column(nullable = false)
-    private String status = "PROPOSED";
+    private Boolean subsidyEligible = false;
 
     @Column(insertable = false, updatable = false)
     private LocalDateTime createdAt;

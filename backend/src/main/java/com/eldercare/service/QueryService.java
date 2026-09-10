@@ -90,7 +90,8 @@ public class QueryService {
             case "COMMUNITY" -> byStatus.getOrDefault("SUBMITTED", 0L)
                     + byStatus.getOrDefault("VERIFIED", 0L)
                     + byStatus.getOrDefault("PLAN_FAMILY_CONFIRMED", 0L)
-                    + byStatus.getOrDefault("CHANGE_PENDING_COMMUNITY", 0L);
+                    + byStatus.getOrDefault("CHANGE_PENDING_COMMUNITY", 0L)
+                    + byStatus.getOrDefault("CHANGE_COORDINATING", 0L);
             case "ASSESSOR" -> byStatus.getOrDefault("ASSIGNED", 0L);
             case "TEAM" -> byStatus.getOrDefault("PLAN_APPROVED", 0L)
                     + byStatus.getOrDefault("SCHEDULED", 0L)

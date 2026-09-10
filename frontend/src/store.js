@@ -50,6 +50,7 @@ export const STATUS_TYPE = {
   IN_CONSTRUCTION: '',
   CHANGE_PENDING_FAMILY: 'danger',
   CHANGE_PENDING_COMMUNITY: 'danger',
+  CHANGE_COORDINATING: 'warning',
   COMPLETED: 'warning',
   SETTLED: 'success',
   VISITED: 'success'

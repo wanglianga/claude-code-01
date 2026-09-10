@@ -158,16 +158,29 @@ public class WorkflowController {
         return workflow.familyConfirmChange(changeId, req.agree(), req.opinion());
     }
 
-    public record CommunityChangeRequest(Boolean approved, String remark) {
+    public record CommunityChangeRequest(String decision, String remark, List<Long> eligibleItemIds) {
     }
 
     @PostMapping("/changes/{changeId}/community")
     @PreAuthorize("hasRole('COMMUNITY')")
     public ConstructionChange communityChange(@PathVariable Long changeId, @RequestBody CommunityChangeRequest req) {
-        if (req.approved() == null) {
-            throw new com.eldercare.common.ApiException("请给出复核结论");
+        if (!"APPROVED".equals(req.decision()) && !"REJECTED".equals(req.decision())
+                && !"COORDINATING".equals(req.decision())) {
+            throw new com.eldercare.common.ApiException("决策必须为 APPROVED / REJECTED / COORDINATING");
         }
-        return workflow.communityReviewChange(changeId, req.approved(), req.remark());
+        return workflow.communityReviewChange(changeId, req.decision(), req.remark(), req.eligibleItemIds());
+    }
+
+    public record CoordinationRequest(Boolean adopted, String remark) {
+    }
+
+    @PostMapping("/changes/{changeId}/coordination")
+    @PreAuthorize("hasRole('COMMUNITY')")
+    public ConstructionChange coordination(@PathVariable Long changeId, @RequestBody CoordinationRequest req) {
+        if (req.adopted() == null) {
+            throw new com.eldercare.common.ApiException("请给出协调结果");
+        }
+        return workflow.resolveCoordination(changeId, req.adopted(), req.remark());
     }
 
     // ---------------- 竣工 / 街道审核 / 质保 ----------------

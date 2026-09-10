@@ -29,6 +29,7 @@ public class WorkflowService {
     private final WorkflowLogRepository logs;
     private final UserRepository users;
     private final PlanItemRejectionRepository rejections;
+    private final ChangeItemRepository changeItems;
 
     public WorkflowService(ApplicationRepository applications, AssessmentRepository assessments,
                            PlanItemRepository planItems, PlanConfirmationRepository confirmations,
@@ -36,7 +37,8 @@ public class WorkflowService {
                            CompletionRepository completions, SubsidyReviewRepository reviews,
                            SettlementRepository settlements, WarrantyVisitRepository visits,
                            WorkflowLogRepository logs, UserRepository users,
-                           PlanItemRejectionRepository rejections) {
+                           PlanItemRejectionRepository rejections,
+                           ChangeItemRepository changeItems) {
         this.applications = applications;
         this.assessments = assessments;
         this.planItems = planItems;
@@ -50,6 +52,7 @@ public class WorkflowService {
         this.logs = logs;
         this.users = users;
         this.rejections = rejections;
+        this.changeItems = changeItems;
     }
 
     // ---------------- 申请 ----------------
@@ -191,7 +194,9 @@ public class WorkflowService {
                 add.setId(null);
                 add.setApplicationId(id);
                 add.setQuantity(add.getQuantity() == null ? 1 : add.getQuantity());
-                add.setSubsidyCap(PlanGenerator.subsidyCapFor(add.getCategory(), add.getUnitPrice()));
+                add.setSubsidyCap(PlanGenerator.subsidyCapFor(add.getCategory(), add.getUnitPrice())
+                        .min(add.getUnitPrice()));
+                add.setSource("FAMILY");
                 add.setStatus("ADDED");
                 planItems.save(add);
             }
@@ -338,17 +343,68 @@ public class WorkflowService {
     public ConstructionChange submitChange(Long id, ConstructionChange form) {
         Application app = mustGet(id);
         mustStatus(app, "IN_CONSTRUCTION");
+
+        // 施工队必须上传现场照片、写明变更说明与新材料需求，禁止仅凭口头变更加价
+        if (form.getSitePhotos() == null || form.getSitePhotos().isBlank()) {
+            throw new ApiException("请上传现场照片或填写照片档案编号");
+        }
+        if (form.getDescription() == null || form.getDescription().isBlank()) {
+            throw new ApiException("请填写变更说明");
+        }
+        if (form.getMaterialRequirements() == null || form.getMaterialRequirements().isBlank()) {
+            throw new ApiException("请填写新的材料需求（无新材料也需注明“不涉及新材料”）");
+        }
+        if (form.getReasonType() == null) {
+            throw new ApiException("请选择变更原因类型");
+        }
+
         form.setId(null);
         form.setApplicationId(id);
         form.setStatus("SUBMITTED");
-        if (form.getCostDelta() == null) {
-            form.setCostDelta(BigDecimal.ZERO);
+
+        BigDecimal materialDelta = BigDecimal.ZERO;
+        BigDecimal laborDelta = BigDecimal.ZERO;
+        if (form.getItems() != null) {
+            for (ChangeItem ci : form.getItems()) {
+                if (ci.getName() == null || ci.getName().isBlank()) {
+                    throw new ApiException("变更明细中存在未命名项目");
+                }
+                if (ci.getMaterialFee() == null) ci.setMaterialFee(BigDecimal.ZERO);
+                if (ci.getLaborFee() == null) ci.setLaborFee(BigDecimal.ZERO);
+                if (ci.getQuantity() == null || ci.getQuantity() <= 0) ci.setQuantity(1);
+                materialDelta = materialDelta.add(ci.getMaterialFee());
+                laborDelta = laborDelta.add(ci.getLaborFee());
+            }
         }
+        // 若团队还填了汇总拆分字段，以明细为准；只给汇总时使用汇总
+        if (form.getMaterialFeeDelta() != null && form.getMaterialFeeDelta().signum() > 0 && materialDelta.signum() == 0) {
+            materialDelta = form.getMaterialFeeDelta();
+        }
+        if (form.getLaborFeeDelta() != null && form.getLaborFeeDelta().signum() > 0 && laborDelta.signum() == 0) {
+            laborDelta = form.getLaborFeeDelta();
+        }
+        form.setMaterialFeeDelta(materialDelta);
+        form.setLaborFeeDelta(laborDelta);
+        form.setCostDelta(materialDelta.add(laborDelta));
+
         ConstructionChange saved = changes.save(form);
+
+        if (form.getItems() != null) {
+            for (ChangeItem ci : form.getItems()) {
+                ci.setId(null);
+                ci.setChangeId(saved.getId());
+                ci.setApplicationId(id);
+                if (ci.getItemType() == null) ci.setItemType("ADD");
+                if (ci.getCategory() == null) ci.setCategory("其他");
+                changeItems.save(ci);
+            }
+        }
+
         app.setStatus("CHANGE_PENDING_FAMILY");
         log(app, "提交现场变更", "IN_CONSTRUCTION", "CHANGE_PENDING_FAMILY",
                 changeReason(saved.getReasonType()) + "：" + saved.getDescription()
-                        + "，费用变化 " + saved.getCostDelta() + " 元");
+                        + "；材料费变化 " + materialDelta + " 元，人工费变化 " + laborDelta
+                        + " 元，须经家属确认、社区核定补贴后生效，未通过前仍按原方案计价");
         return saved;
     }
 
@@ -362,36 +418,145 @@ public class WorkflowService {
         ch.setFamilyConfirmedAt(LocalDateTime.now());
         if (Boolean.FALSE.equals(agree)) {
             ch.setStatus("REJECTED");
+            ch.setCommunityDecision("REJECTED");
+            ch.setResolvedAt(LocalDateTime.now());
             app.setStatus("IN_CONSTRUCTION");
             log(app, "家属驳回变更", "CHANGE_PENDING_FAMILY", "IN_CONSTRUCTION",
-                    "变更#" + ch.getId() + " 家属不同意：" + opinion);
+                    "变更#" + ch.getId() + " 家属不同意，保留原方案继续施工：" + opinion);
         } else {
             ch.setStatus("FAMILY_CONFIRMED");
             app.setStatus("CHANGE_PENDING_COMMUNITY");
             log(app, "家属同意变更", "CHANGE_PENDING_FAMILY", "CHANGE_PENDING_COMMUNITY",
-                    "变更#" + ch.getId() + " 家属意见：" + opinion);
+                    "变更#" + ch.getId() + " 家属意见：" + nz(opinion)
+                            + "；待社区判断是否影响补贴资格并重算费用");
         }
         return ch;
     }
 
+    /**
+     * 社区复核变更并判断补贴影响。
+     * decision: APPROVED 通过（重算清单与费用，新增项目并入方案）
+     *           REJECTED 未通过（保留原方案，变更费用不予认可）
+     *           COORDINATING 转社区协调（工单暂挂，施工队不得按变更加价施工）
+     * eligibleItemIds：社区逐项核定可计入报销的变更明细
+     */
     @Transactional
-    public ConstructionChange communityReviewChange(Long changeId, Boolean approved, String remark) {
+    public ConstructionChange communityReviewChange(Long changeId, String decision, String remark,
+                                                    java.util.List<Long> eligibleItemIds) {
         ConstructionChange ch = mustChange(changeId);
         Application app = mustGet(ch.getApplicationId());
         mustStatus(app, "CHANGE_PENDING_COMMUNITY");
         ch.setCommunityRemark(remark);
         ch.setCommunityReviewedAt(LocalDateTime.now());
-        if (Boolean.TRUE.equals(approved)) {
+        ch.setCommunityDecision(decision);
+
+        List<ChangeItem> cis = changeItems.findByChangeId(changeId);
+        java.util.Set<Long> eligible = eligibleItemIds == null ? java.util.Set.of()
+                : new java.util.HashSet<>(eligibleItemIds);
+
+        if ("APPROVED".equals(decision)) {
+            boolean subsidyAffected = !eligible.isEmpty();
+            ch.setSubsidyAffected(subsidyAffected);
+
+            // 新增/替代项目并入方案清单；可报销项按规则给补贴上限（新增可报销金额）
+            BigDecimal addReimburse = BigDecimal.ZERO;
+            for (ChangeItem ci : cis) {
+                boolean ok = eligible.contains(ci.getId());
+                ci.setSubsidyEligible(ok);
+                changeItems.save(ci);
+                if ("ADD".equals(ci.getItemType())) {
+                    PlanItem pi = new PlanItem();
+                    pi.setApplicationId(app.getId());
+                    pi.setCategory(ci.getCategory());
+                    pi.setName(ci.getName());
+                    pi.setSpec(ci.getSpec());
+                    pi.setUnit(ci.getUnit());
+                    pi.setQuantity(ci.getQuantity());
+                    BigDecimal line = ci.getMaterialFee().add(ci.getLaborFee());
+                    // 单价 = 行金额/数量；材料/人工为行金额拆分
+                    BigDecimal perUnit = line.divide(BigDecimal.valueOf(ci.getQuantity()),
+                            2, java.math.RoundingMode.HALF_UP);
+                    pi.setUnitPrice(perUnit);
+                    pi.setMaterialFee(ci.getMaterialFee());
+                    pi.setLaborFee(ci.getLaborFee());
+                    // 社区核定可报销：单价上限按可报销单价计（受总额封顶约束），否则为 0
+                    pi.setSubsidyCap(ok ? perUnit : BigDecimal.ZERO);
+                    pi.setSource("CHANGE");
+                    pi.setReason("施工变更并入（变更#" + ch.getId() + "）：" + nz(ci.getReason()));
+                    pi.setConstructionImpact("变更核准后施工，材料：" + nz(ch.getMaterialRequirements()));
+                    pi.setStatus("CHANGE_ADDED");
+                    planItems.save(pi);
+                    if (ok) addReimburse = addReimburse.add(line);
+                }
+            }
+
+            // 重新生成全单材料费、人工费、可报销金额
+            List<PlanItem> active = planItems.findByApplicationIdAndStatusNot(app.getId(), "REMOVED");
+            BigDecimal newMaterial = PlanGenerator.splitCost(active).material();
+            BigDecimal newLabor = PlanGenerator.splitCost(active).labor();
+            PlanGenerator.Cost newCost = PlanGenerator.calc(active);
+
             ch.setStatus("COMMUNITY_APPROVED");
+            ch.setNewMaterialFee(newMaterial);
+            ch.setNewLaborFee(newLabor);
+            ch.setNewTotalCost(newCost.total());
+            ch.setNewSubsidyAmount(newCost.subsidy());
+            // 本次新增可报销 = 本次勾选可报销的新增项金额（总额可报销仍受 5000 封顶约束）
+            ch.setReimbursementDelta(addReimburse);
+            ch.setResolvedAt(LocalDateTime.now());
             app.setStatus("IN_CONSTRUCTION");
-            log(app, "社区核准变更", "CHANGE_PENDING_COMMUNITY", "IN_CONSTRUCTION",
-                    "变更#" + ch.getId() + " 核准通过" + costNote(ch) + "；" + nz(remark));
+            log(app, "社区核准变更并重算费用", "CHANGE_PENDING_COMMUNITY", "IN_CONSTRUCTION",
+                    "变更#" + ch.getId() + " 核准通过：重算后材料费 " + newMaterial + " 元、人工费 "
+                            + newLabor + " 元、总费用 " + newCost.total() + " 元、可报销 "
+                            + newCost.subsidy() + " 元（本次新增可报销 " + addReimburse + " 元）；" + nz(remark));
+        } else if ("COORDINATING".equals(decision)) {
+            ch.setStatus("COORDINATING");
+            ch.setCoordinationNote(remark);
+            ch.setResolvedAt(LocalDateTime.now());
+            app.setStatus("CHANGE_COORDINATING");
+            log(app, "变更转社区协调", "CHANGE_PENDING_COMMUNITY", "CHANGE_COORDINATING",
+                    "变更#" + ch.getId() + " 存在补贴/施工争议，转社区协调：" + nz(remark)
+                            + "；协调期间施工队不得按变更内容加价施工");
         } else {
             ch.setStatus("REJECTED");
+            ch.setSubsidyAffected(false);
+            ch.setResolvedAt(LocalDateTime.now());
             app.setStatus("IN_CONSTRUCTION");
             log(app, "社区驳回变更", "CHANGE_PENDING_COMMUNITY", "IN_CONSTRUCTION",
-                    "变更#" + ch.getId() + " 不符合补贴/施工规则：" + nz(remark));
+                    "变更#" + ch.getId() + " 不予认可，保留原方案与原费用，继续施工：" + nz(remark));
         }
+        return ch;
+    }
+
+    /** 社区协调完成后恢复施工（协调结果以 remark 记录） */
+    @Transactional
+    public ConstructionChange resolveCoordination(Long changeId, Boolean adopted, String remark) {
+        ConstructionChange ch = mustChange(changeId);
+        Application app = mustGet(ch.getApplicationId());
+        mustStatus(app, "CHANGE_COORDINATING");
+        ch.setCoordinationNote((ch.getCoordinationNote() == null ? "" : ch.getCoordinationNote() + "\n")
+                + "协调结果：" + nz(remark));
+        ch.setResolvedAt(LocalDateTime.now());
+        if (Boolean.TRUE.equals(adopted)) {
+            // 协调采纳：等价于核准（无新增报销，避免绕过补贴核定）
+            ch.setStatus("COMMUNITY_APPROVED");
+            ch.setCommunityDecision("APPROVED");
+            ch.setSubsidyAffected(false);
+            List<PlanItem> active = planItems.findByApplicationIdAndStatusNot(app.getId(), "REMOVED");
+            ch.setNewMaterialFee(PlanGenerator.splitCost(active).material());
+            ch.setNewLaborFee(PlanGenerator.splitCost(active).labor());
+            ch.setNewTotalCost(PlanGenerator.calc(active).total());
+            ch.setNewSubsidyAmount(PlanGenerator.calc(active).subsidy());
+            ch.setReimbursementDelta(BigDecimal.ZERO);
+            log(app, "社区协调完成（采纳变更，费用自理）", "CHANGE_COORDINATING", "IN_CONSTRUCTION",
+                    "变更#" + ch.getId() + " 协调后采纳但不新增补贴：" + nz(remark));
+        } else {
+            ch.setStatus("REJECTED");
+            ch.setCommunityDecision("REJECTED");
+            log(app, "社区协调完成（维持原方案）", "CHANGE_COORDINATING", "IN_CONSTRUCTION",
+                    "变更#" + ch.getId() + " 协调后维持原方案：" + nz(remark));
+        }
+        app.setStatus("IN_CONSTRUCTION");
         return ch;
     }
 
@@ -491,6 +656,11 @@ public class WorkflowService {
         d.put("confirmations", confirmations.findByApplicationIdOrderByRoundNoDesc(id));
         schedules.findByApplicationId(id).ifPresent(s -> d.put("schedule", s));
         d.put("changes", changes.findByApplicationIdOrderByCreatedAtDesc(id));
+        Map<Long, List<ChangeItem>> itemsByChange = new java.util.HashMap<>();
+        for (ChangeItem ci : changeItems.findByApplicationId(id)) {
+            itemsByChange.computeIfAbsent(ci.getChangeId(), k -> new java.util.ArrayList<>()).add(ci);
+        }
+        d.put("changeItems", itemsByChange);
         completions.findByApplicationId(id).ifPresent(c -> d.put("completion", c));
         reviews.findByApplicationId(id).ifPresent(r -> d.put("subsidyReview", r));
         settlements.findByApplicationId(id).ifPresent(s -> d.put("settlement", s));

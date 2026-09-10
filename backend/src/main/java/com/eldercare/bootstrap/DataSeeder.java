@@ -33,6 +33,7 @@ public class DataSeeder implements CommandLineRunner {
     private final WarrantyVisitRepository visits;
     private final WorkflowLogRepository logs;
     private final PlanItemRejectionRepository rejections;
+    private final ChangeItemRepository changeItems;
     private final PasswordEncoder encoder;
 
     public DataSeeder(UserRepository users, ApplicationRepository applications,
@@ -41,7 +42,8 @@ public class DataSeeder implements CommandLineRunner {
                       ConstructionChangeRepository changes, CompletionRepository completions,
                       SubsidyReviewRepository reviews, SettlementRepository settlements,
                       WarrantyVisitRepository visits, WorkflowLogRepository logs,
-                      PlanItemRejectionRepository rejections, PasswordEncoder encoder) {
+                      PlanItemRejectionRepository rejections, ChangeItemRepository changeItems,
+                      PasswordEncoder encoder) {
         this.users = users;
         this.applications = applications;
         this.assessments = assessments;
@@ -55,6 +57,7 @@ public class DataSeeder implements CommandLineRunner {
         this.visits = visits;
         this.logs = logs;
         this.rejections = rejections;
+        this.changeItems = changeItems;
         this.encoder = encoder;
     }
 
@@ -190,19 +193,107 @@ public class DataSeeder implements CommandLineRunner {
                 "IN_CONSTRUCTION", "中");
         timeline(a8, "开工", "SCHEDULED", "IN_CONSTRUCTION", team, "扶手与防滑工序进行中");
 
-        // 9. 现场变更待家属确认
+        // 9. 现场变更待家属确认（墙体空鼓无法打孔，附照片/材料需求/费用拆分）
         Application a9 = plannedApp(family1, community, assessor, team, "钱国栋", 84,
                 "CHANGE_PENDING_FAMILY", "高");
         ConstructionChange ch = new ConstructionChange();
         ch.setApplicationId(a9.getId());
         ch.setReasonType("WALL_UNDRILLABLE");
-        ch.setDescription("卫生间淋浴位墙体为轻质隔墙，原方案膨胀螺栓无法承重，"
-                + "拟改为背板穿墙对穿固定并增加不锈钢背板，材料与人工增加 320 元");
+        ch.setDescription("卫生间淋浴位墙体敲击大面积空鼓，为轻质隔墙，原方案膨胀螺栓无法承重，"
+                + "拟改为不锈钢背板穿墙对穿固定工艺");
+        ch.setSitePhotos("现场档案 CHG-009：空鼓墙面近景2张、敲击视频截图1张、卷尺测距1张（共4张）");
+        ch.setMaterialRequirements("304不锈钢背板2块（400×250mm）、M8穿墙对穿螺栓4套、装饰盖及密封胶");
+        ch.setMaterialFeeDelta(new BigDecimal("220.00"));
+        ch.setLaborFeeDelta(new BigDecimal("100.00"));
         ch.setCostDelta(new BigDecimal("320.00"));
         ch.setStatus("SUBMITTED");
         changes.save(ch);
+        ChangeItem ci9 = new ChangeItem();
+        ci9.setChangeId(ch.getId());
+        ci9.setApplicationId(a9.getId());
+        ci9.setItemType("REPLACE");
+        ci9.setCategory("扶手");
+        ci9.setName("淋浴扶手穿墙背板加固工艺");
+        ci9.setSpec("304不锈钢背板+M8对穿螺栓");
+        ci9.setUnit("处");
+        ci9.setQuantity(1);
+        ci9.setMaterialFee(new BigDecimal("220.00"));
+        ci9.setLaborFee(new BigDecimal("100.00"));
+        ci9.setReason("墙体空鼓，膨胀螺栓拉拔力不足，存在扶手脱落风险");
+        ci9.setSubsidyEligible(false);
+        changeItems.save(ci9);
         timeline(a9, "提交现场变更", "IN_CONSTRUCTION", "CHANGE_PENDING_FAMILY", team,
-                "墙体无法打孔，变更安装工艺，费用 +320 元");
+                "墙体空鼓无法打孔，材料费+220、人工费+100，合计+320元，已上传4张现场照片，待家属确认、社区核定补贴");
+
+        // 8b. 工单8补一条已核准变更：瓷砖易裂 → 新增防裂护角，展示费用重算结果
+        PlanGenerator.Cost before8 = PlanGenerator.calc(
+                planItems.findByApplicationIdAndStatusNot(a8.getId(), "REMOVED"));
+        ConstructionChange ch8 = new ConstructionChange();
+        ch8.setApplicationId(a8.getId());
+        ch8.setReasonType("TILE_CRACK");
+        ch8.setDescription("坐便器旁旧瓷砖空鼓易裂，直接打孔会造成整片脱落，需先做挂网防裂处理再装扶手");
+        ch8.setSitePhotos("现场档案 CHG-008：瓷砖空鼓标记照2张、防裂处理工艺样板1张");
+        ch8.setMaterialRequirements("防裂钢网、瓷砖胶、同色填缝剂");
+        ch8.setMaterialFeeDelta(new BigDecimal("180.00"));
+        ch8.setLaborFeeDelta(new BigDecimal("140.00"));
+        ch8.setCostDelta(new BigDecimal("320.00"));
+        ch8.setStatus("COMMUNITY_APPROVED");
+        ch8.setCommunityDecision("APPROVED");
+        ch8.setSubsidyAffected(true);
+        ch8.setFamilyConfirmedAt(LocalDateTime.now().minusDays(1));
+        ch8.setFamilyOpinion("同意处理，要求瓷砖颜色尽量一致");
+        ch8.setCommunityReviewedAt(LocalDateTime.now().minusHours(20));
+        ch8.setCommunityRemark("属扶手安装必要基层处理，材料与人工价格合理，纳入可报销范围");
+        ch8.setResolvedAt(LocalDateTime.now().minusHours(20));
+        changes.save(ch8);
+        ChangeItem ci8 = new ChangeItem();
+        ci8.setChangeId(ch8.getId());
+        ci8.setApplicationId(a8.getId());
+        ci8.setItemType("ADD");
+        ci8.setCategory("扶手");
+        ci8.setName("坐便旁墙面挂网防裂处理");
+        ci8.setSpec("防裂钢网+瓷砖胶，约0.3㎡");
+        ci8.setUnit("处");
+        ci8.setQuantity(1);
+        ci8.setMaterialFee(new BigDecimal("180.00"));
+        ci8.setLaborFee(new BigDecimal("140.00"));
+        ci8.setReason("旧瓷砖空鼓易裂，需加固基层后再安装扶手");
+        ci8.setSubsidyEligible(true);
+        changeItems.save(ci8);
+        // 并入方案清单
+        PlanItem added8 = new PlanItem();
+        added8.setApplicationId(a8.getId());
+        added8.setCategory("扶手");
+        added8.setName("坐便旁墙面挂网防裂处理");
+        added8.setSpec("防裂钢网+瓷砖胶，约0.3㎡");
+        added8.setUnit("处");
+        added8.setQuantity(1);
+        added8.setUnitPrice(new BigDecimal("320.00"));
+        added8.setSubsidyCap(new BigDecimal("320.00"));
+        added8.setMaterialFee(new BigDecimal("180.00"));
+        added8.setLaborFee(new BigDecimal("140.00"));
+        added8.setSource("CHANGE");
+        added8.setReason("施工变更并入（变更#" + ch8.getId() + "）：旧瓷砖空鼓易裂");
+        added8.setConstructionImpact("约2小时，无明显噪音");
+        added8.setStatus("CHANGE_ADDED");
+        planItems.save(added8);
+        PlanGenerator.Cost after8 = PlanGenerator.calc(
+                planItems.findByApplicationIdAndStatusNot(a8.getId(), "REMOVED"));
+        PlanGenerator.MaterialLabor ml8 = PlanGenerator.splitCost(
+                planItems.findByApplicationIdAndStatusNot(a8.getId(), "REMOVED"));
+        ch8.setNewMaterialFee(ml8.material());
+        ch8.setNewLaborFee(ml8.labor());
+        ch8.setNewTotalCost(after8.total());
+        ch8.setNewSubsidyAmount(after8.subsidy());
+        ch8.setReimbursementDelta(after8.subsidy().subtract(before8.subsidy()).max(BigDecimal.ZERO));
+        changes.save(ch8);
+        timeline(a8, "提交现场变更", "IN_CONSTRUCTION", "CHANGE_PENDING_FAMILY", team,
+                "瓷砖易裂需挂网防裂处理，材料+180、人工+140");
+        timeline(a8, "家属同意变更", "CHANGE_PENDING_FAMILY", "CHANGE_PENDING_COMMUNITY", family2,
+                "同意处理，要求瓷砖颜色一致");
+        timeline(a8, "社区核准变更并重算费用", "CHANGE_PENDING_COMMUNITY", "IN_CONSTRUCTION", community,
+                "纳入可报销，重算后总费用 " + after8.total() + " 元，可报销 " + after8.subsidy()
+                        + " 元，本次新增可报销 " + ch8.getReimbursementDelta() + " 元");
 
         // 10. 竣工待街道审核
         Application a10 = plannedApp(family2, community, assessor, team, "马桂芳", 77,

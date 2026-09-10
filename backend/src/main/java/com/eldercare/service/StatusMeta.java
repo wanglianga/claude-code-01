@@ -17,17 +17,20 @@ public final class StatusMeta {
             Map.entry("IN_CONSTRUCTION", "施工中"),
             Map.entry("CHANGE_PENDING_FAMILY", "变更待家属确认"),
             Map.entry("CHANGE_PENDING_COMMUNITY", "变更待社区复核"),
+            Map.entry("CHANGE_COORDINATING", "变更社区协调中"),
             Map.entry("COMPLETED", "竣工待街道审核"),
             Map.entry("SETTLED", "补贴已审核已结算"),
             Map.entry("VISITED", "质保回访完成")
     );
 
     public static final Map<String, String> CHANGE_REASONS = Map.of(
-            "WALL_UNDRILLABLE", "墙体无法打孔",
-            "PIPE_BLOCK", "管线占位",
+            "WALL_UNDRILLABLE", "墙体空鼓/无法打孔",
+            "TILE_CRACK", "瓷砖易裂需保护",
+            "PIPE_BLOCK", "扶手位置被管线占用",
             "HOSPITAL", "老人临时住院",
-            "FAMILY_CHANGE", "家属意见变化",
-            "MODEL_MISMATCH", "材料型号不匹配"
+            "FAMILY_CHANGE", "老人/家属临时要求增加项目",
+            "MODEL_MISMATCH", "材料型号不匹配",
+            "ADD_ITEM", "现场新增改造项目"
     );
 
     private StatusMeta() {
