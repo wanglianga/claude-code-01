@@ -34,7 +34,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { useAuthStore } from '../store'
@@ -57,6 +57,8 @@ const loading = ref(false)
 async function load() {
   loading.value = true
   try {
+    // 路由参数变化（组件复用）时重置数据，避免短暂展示上一张工单
+    d.value = {}
     d.value = await api.get(`/applications/${route.params.id}`)
   } finally {
     loading.value = false
@@ -71,8 +73,19 @@ function scrollComplete() {
 
 onMounted(async () => {
   meta.value = await api.get('/meta')
-  await load()
 })
+
+// 同组件复用时 :id 变化（如 #/applications/4 → #/applications/9），重新加载工单
+watch(
+  () => route.params.id,
+  (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      window.scrollTo({ top: 0 })
+      load()
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
