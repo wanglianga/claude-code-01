@@ -28,13 +28,15 @@ public class WorkflowService {
     private final WarrantyVisitRepository visits;
     private final WorkflowLogRepository logs;
     private final UserRepository users;
+    private final PlanItemRejectionRepository rejections;
 
     public WorkflowService(ApplicationRepository applications, AssessmentRepository assessments,
                            PlanItemRepository planItems, PlanConfirmationRepository confirmations,
                            ConstructionScheduleRepository schedules, ConstructionChangeRepository changes,
                            CompletionRepository completions, SubsidyReviewRepository reviews,
                            SettlementRepository settlements, WarrantyVisitRepository visits,
-                           WorkflowLogRepository logs, UserRepository users) {
+                           WorkflowLogRepository logs, UserRepository users,
+                           PlanItemRejectionRepository rejections) {
         this.applications = applications;
         this.assessments = assessments;
         this.planItems = planItems;
@@ -47,6 +49,7 @@ public class WorkflowService {
         this.visits = visits;
         this.logs = logs;
         this.users = users;
+        this.rejections = rejections;
     }
 
     // ---------------- 申请 ----------------
@@ -110,13 +113,23 @@ public class WorkflowService {
         if (!app.getAssessorId().equals(CurrentUser.get().id())) {
             throw new ApiException("该评估任务未派给当前评估师");
         }
+
+        // 平台风险分级：五维度现场记录 → 综合评分与等级
+        RiskService.RiskResult risk = RiskService.evaluate(app, form);
+        form.setMobilityScore(risk.mobility());
+        form.setWetnessScore(risk.wetness());
+        form.setBedDifficultyScore(risk.bed());
+        form.setLightingScore(risk.lighting());
+        form.setEmergencyScore(risk.emergency());
+        form.setRiskScore(risk.total());
+        form.setFallRiskLevel(risk.level());
+        form.setRiskFactors(String.join("；", risk.factors()));
+        form.setCareRecommendation(risk.careRecommendation());
+
         form.setId(null);
         form.setApplicationId(id);
         form.setAssessorId(CurrentUser.get().id());
         form.setAssessedAt(LocalDateTime.now());
-        if (form.getFallRiskLevel() == null) {
-            form.setFallRiskLevel(deriveRisk(app, form));
-        }
         Assessment saved = assessments.save(form);
 
         // 评估结果直接驱动改造方案
@@ -126,39 +139,47 @@ public class WorkflowService {
 
         app.setStatus("PLAN_REVIEW");
         log(app, "入户评估完成", "ASSIGNED", "PLAN_REVIEW",
-                "评估师入户采集完成，系统生成 " + generated.size() + " 项改造建议，跌倒风险："
-                        + saved.getFallRiskLevel());
+                "评估师入户采集完成，系统五维度综合评分 " + risk.total() + "/15，风险等级【"
+                        + risk.level() + "】，生成 " + generated.size() + " 项改造建议"
+                        + ("高".equals(risk.level()) ? "；高风险家庭将优先排期并提示施工陪同/临时照护" : ""));
         return saved;
-    }
-
-    private String deriveRisk(Application app, Assessment a) {
-        int score = 0;
-        if (a.getThresholdHeight() != null && a.getThresholdHeight().compareTo(new BigDecimal("3")) >= 0) score++;
-        if ("昏暗".equals(a.getNightLighting())) score++;
-        if (a.getBedTransferDifficulty() != null && !a.getBedTransferDifficulty().isBlank()) score++;
-        if (app.getFallHistory() != null && app.getFallHistory().contains("有")) score += 2;
-        if ("拐杖".equals(app.getMobility()) || "轮椅".equals(app.getMobility())) score += 2;
-        if ("卧床".equals(app.getMobility())) score += 3;
-        return score >= 4 ? "高" : score >= 2 ? "中" : "低";
     }
 
     // ---------------- 家属确认方案 / 社区复核补贴 ----------------
 
     @Transactional
-    public PlanConfirmation familyConfirmPlan(Long id, String signer, List<Long> removedItemIds,
+    public PlanConfirmation familyConfirmPlan(Long id, String signer, List<RemovedItem> removals,
                                               List<PlanItem> addedItems) {
         Application app = mustGet(id);
         mustStatus(app, "PLAN_REVIEW");
         checkFamilyOwnership(app);
 
-        if (removedItemIds != null) {
-            for (Long itemId : removedItemIds) {
-                PlanItem item = planItems.findById(itemId)
-                        .orElseThrow(() -> new ApiException("改造项目不存在: " + itemId));
+        Assessment assessment = assessments.findByApplicationId(id).orElse(null);
+        String riskLevel = assessment == null ? null : assessment.getFallRiskLevel();
+
+        if (removals != null) {
+            for (RemovedItem r : removals) {
+                PlanItem item = planItems.findById(r.itemId())
+                        .orElseThrow(() -> new ApiException("改造项目不存在: " + r.itemId()));
                 if (!item.getApplicationId().equals(id)) {
                     throw new ApiException("项目不属于该申请");
                 }
+                String reason = r.familyReason() == null ? "" : r.familyReason().trim();
+                if (reason.isEmpty()) {
+                    throw new ApiException("删除项目【" + item.getName() + "】必须填写原因，该说明将随风险评估提交街道备查");
+                }
                 item.setStatus("REMOVED");
+
+                // 保留评估师说明 + 家属拒绝原因，街道审核补贴时可查
+                PlanItemRejection rec = new PlanItemRejection();
+                rec.setApplicationId(id);
+                rec.setPlanItemId(item.getId());
+                rec.setItemName(item.getName());
+                rec.setCategory(item.getCategory());
+                rec.setAssessorNote(item.getReason());
+                rec.setFamilyReason(reason);
+                rec.setRiskLevel(riskLevel);
+                rejections.save(rec);
             }
         }
         if (addedItems != null) {
@@ -196,10 +217,17 @@ public class WorkflowService {
         confirmations.save(pc);
 
         app.setStatus("PLAN_FAMILY_CONFIRMED");
+        int rejectionCount = removals == null ? 0 : removals.size();
         log(app, "家属确认方案（第" + round + "轮）", "PLAN_REVIEW", "PLAN_FAMILY_CONFIRMED",
                 "家属签字：" + pc.getFamilySigner() + "，合计 " + cost.total()
-                        + " 元，拟补贴 " + cost.subsidy() + " 元，自付 " + cost.selfPay() + " 元");
+                        + " 元，拟补贴 " + cost.subsidy() + " 元，自付 " + cost.selfPay() + " 元"
+                        + (riskLevel != null ? "；评估风险等级【" + riskLevel + "】" : "")
+                        + (rejectionCount > 0 ? "；家属拒绝 " + rejectionCount + " 项（已记录原因，街道审核可查）" : ""));
         return pc;
+    }
+
+    /** 家属删除项目：项目 + 必填的拒绝原因 */
+    public record RemovedItem(Long itemId, String familyReason) {
     }
 
     /**
@@ -256,6 +284,19 @@ public class WorkflowService {
     public ConstructionSchedule teamAccept(Long id, ConstructionSchedule form) {
         Application app = mustGet(id);
         mustStatus(app, "PLAN_APPROVED");
+        Assessment assessment = assessments.findByApplicationId(id).orElse(null);
+        boolean highRisk = assessment != null && "高".equals(assessment.getFallRiskLevel());
+
+        if (highRisk) {
+            String care = form.getCareRequired();
+            if (care == null || "NONE".equals(care)) {
+                throw new ApiException("高风险家庭必须明确施工期间的家属陪同或临时照护安排后才能接单");
+            }
+            if (form.getCareArrangement() == null || form.getCareArrangement().isBlank()) {
+                throw new ApiException("请填写陪同/临时照护的具体安排（由谁陪同/照护、时间段、联系人）");
+            }
+        }
+
         ConstructionSchedule s = schedules.findByApplicationId(id).orElseGet(ConstructionSchedule::new);
         s.setApplicationId(id);
         s.setTeamId(CurrentUser.get().id());
@@ -267,11 +308,21 @@ public class WorkflowService {
         s.setElderSchedule(form.getElderSchedule());
         s.setNoiseRestriction(form.getNoiseRestriction());
         s.setRemark(form.getRemark());
+        // 高风险家庭优先排期
+        s.setPriority(highRisk ? 1 : 0);
+        s.setCareRequired(form.getCareRequired() == null ? "NONE" : form.getCareRequired());
+        s.setCareArrangement(form.getCareArrangement());
         ConstructionSchedule saved = schedules.save(s);
 
         app.setStatus("SCHEDULED");
+        String careNote = highRisk
+                ? "；高风险【优先排期】，照护安排：" + ("TEMP_CARE".equals(saved.getCareRequired())
+                        ? "临时照护" : "家属陪同") + "（" + saved.getCareArrangement() + "）"
+                : "";
         log(app, "施工队接单排期", "PLAN_APPROVED", "SCHEDULED",
-                "计划 " + s.getScheduledStart() + " 至 " + s.getScheduledEnd() + " 上门施工");
+                (highRisk ? "高风险家庭优先排期，" : "")
+                        + "计划 " + s.getScheduledStart() + " 至 " + s.getScheduledEnd()
+                        + " 上门施工" + careNote);
         return saved;
     }
 
@@ -444,6 +495,7 @@ public class WorkflowService {
         reviews.findByApplicationId(id).ifPresent(r -> d.put("subsidyReview", r));
         settlements.findByApplicationId(id).ifPresent(s -> d.put("settlement", s));
         d.put("warrantyVisits", visits.findByApplicationIdOrderByVisitTimeDesc(id));
+        d.put("rejections", rejections.findByApplicationIdOrderByCreatedAtDesc(id));
         d.put("logs", logs.findByApplicationIdOrderByCreatedAtAsc(id));
         return d;
     }

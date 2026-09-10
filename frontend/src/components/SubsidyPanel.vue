@@ -2,6 +2,46 @@
   <el-card v-if="show" shadow="never" style="margin-bottom:14px">
     <div class="section-title" style="margin-top:0">街道补贴审核 → 回写施工队结算</div>
 
+    <!-- 风险判断如何影响最终方案（街道必看） -->
+    <el-descriptions v-if="d.assessment" :column="3" border class="risk-box" size="small">
+      <el-descriptions-item label="评估风险等级">
+        <el-tag :type="riskType" size="small" effect="dark">
+          {{ d.assessment.fallRiskLevel }}风险 · {{ d.assessment.riskScore }}/15
+        </el-tag>
+      </el-descriptions-item>
+      <el-descriptions-item label="行动/湿滑/起身">
+        {{ d.assessment.mobilityScore }}+{{ d.assessment.wetnessScore }}+{{ d.assessment.bedDifficultyScore }}
+      </el-descriptions-item>
+      <el-descriptions-item label="照明/呼叫">
+        {{ d.assessment.lightingScore }}+{{ d.assessment.emergencyScore }}
+      </el-descriptions-item>
+      <el-descriptions-item label="主要风险因子" :span="3">{{ riskFactors }}</el-descriptions-item>
+      <el-descriptions-item v-if="d.schedule?.priority === 1" label="高风险排期/照护" :span="3">
+        已优先排期；{{ d.schedule.careRequired === 'TEMP_CARE' ? '临时照护' : '家属陪同' }}：{{ d.schedule.careArrangement }}
+      </el-descriptions-item>
+    </el-descriptions>
+
+    <div v-if="d.rejections?.length" class="reject-box">
+      <el-alert type="warning" :closable="false" show-icon
+                title="以下高风险相关改造项目被家属拒绝，请结合评估师说明与家属原因审慎核定补贴与责任"
+                style="margin-bottom:8px" />
+      <el-table :data="d.rejections" border size="small">
+        <el-table-column label="拒绝项目" min-width="170">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ row.category }}</el-tag>
+            <b style="margin-left:6px">{{ row.itemName }}</b>
+            <el-tag v-if="row.riskLevel === '高'" size="small" type="danger" style="margin-left:6px">高风险时建议</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="评估师说明（风险依据）" min-width="230">
+          <template #default="{ row }">{{ row.assessorNote }}</template>
+        </el-table-column>
+        <el-table-column label="家属拒绝原因" min-width="200">
+          <template #default="{ row }"><span style="color:#c4561e">{{ row.familyReason }}</span></template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <!-- 街道审核操作 -->
     <el-form v-if="role === 'STREET' && app.status === 'COMPLETED'" :model="f" label-width="140px">
       <el-alert type="info" :closable="false" style="margin-bottom:12px"
@@ -99,6 +139,12 @@ const emit = defineEmits(['done'])
 const loading = ref(false)
 const loadingW = ref(false)
 
+const riskType = computed(() => {
+  const l = props.d.assessment?.fallRiskLevel
+  return l === '高' ? 'danger' : l === '中' ? 'warning' : 'success'
+})
+const riskFactors = computed(() => (props.d.assessment?.riskFactors || '—').replaceAll('；', '；'))
+
 const f = reactive({
   conclusion: 'APPROVED',
   approvedSubsidy: props.d.completion?.totalCost ? Number(props.d.completion.totalCost) : 3000,
@@ -144,6 +190,12 @@ async function submitVisit() {
   margin-left: 12px;
   color: #98a29e;
   font-size: 13px;
+}
+.risk-box {
+  margin-bottom: 12px;
+}
+.reject-box {
+  margin-bottom: 14px;
 }
 .settle {
   margin-top: 14px;

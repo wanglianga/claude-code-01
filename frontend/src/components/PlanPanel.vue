@@ -13,6 +13,9 @@
           <div class="item-name">
             <el-tag size="small" effect="plain">{{ row.category }}</el-tag>
             <span :class="{ removed: row.status === 'REMOVED' }">{{ row.name }}</span>
+            <el-tag v-if="HIGH_RISK_CATEGORIES.includes(row.category)" size="small" type="danger" effect="dark">
+              高风险项
+            </el-tag>
             <el-tag v-if="row.status === 'ADDED'" size="small" type="warning">家属新增</el-tag>
             <el-tag v-if="row.status === 'REMOVED'" size="small" type="info">已删除</el-tag>
           </div>
@@ -99,6 +102,29 @@
       </el-button>
     </div>
 
+    <!-- 已拒绝项目留痕（家属确认后家属/社区/街道均可见） -->
+    <div v-if="d.rejections?.length" class="rejections">
+      <div class="section-title">家属拒绝项目留痕（提交街道补贴审核备查）</div>
+      <el-table :data="d.rejections" border size="small">
+        <el-table-column label="拒绝项目" min-width="180">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ row.category }}</el-tag>
+            <b style="margin-left:6px">{{ row.itemName }}</b>
+            <el-tag v-if="row.riskLevel === '高'" size="small" type="danger" style="margin-left:6px">评估为高风险时建议</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="评估师说明（建议依据）" min-width="240">
+          <template #default="{ row }"><span class="assessor-note">{{ row.assessorNote }}</span></template>
+        </el-table-column>
+        <el-table-column label="家属拒绝原因" min-width="220">
+          <template #default="{ row }"><span class="family-reason">{{ row.familyReason }}</span></template>
+        </el-table-column>
+        <el-table-column label="时间" width="150">
+          <template #default="{ row }">{{ fmt(row.createdAt) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <!-- 社区复核 -->
     <div v-if="role === 'COMMUNITY' && app.status === 'PLAN_FAMILY_CONFIRMED'" class="action-row community">
       <el-input v-model="reviewRemark" type="textarea" :rows="2" style="max-width:520px"
@@ -133,6 +159,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, EditPen } from '@element-plus/icons-vue'
 import api from '../api'
 
+const HIGH_RISK_CATEGORIES = ['扶手', '坐便', '紧急呼叫', '床边护栏']
+
 const props = defineProps({ app: Object, role: String, d: Object, meta: Object })
 const emit = defineEmits(['done'])
 
@@ -141,6 +169,8 @@ const signer = ref('')
 const reviewRemark = ref('')
 const showAdd = ref(false)
 const capEdit = reactive({})
+// 项目id -> 家属删除原因
+const removalReasons = reactive({})
 
 const addForm = reactive({
   category: '其他', name: '', unitPrice: 200, quantity: 1, reason: '', constructionImpact: ''
@@ -194,10 +224,38 @@ const cost = computed(() => {
   }
 })
 
-function remove(row) {
-  row.status = 'REMOVED'
+async function remove(row) {
+  const isHigh = HIGH_RISK_CATEGORIES.includes(row.category)
+  try {
+    const { value } = await ElMessageBox.prompt(
+      (isHigh
+        ? `【${row.name}】是针对${riskBasis(row)}的高风险建议项。删除前请填写家属拒绝原因，评估师说明与家属原因将随风险评估提交街道备查。`
+        : `删除【${row.name}】前请填写原因，该说明将随风险评估提交街道备查。`),
+      isHigh ? '删除高风险改造项目' : '删除改造项目',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '保留该项目',
+        inputType: 'textarea',
+        inputPlaceholder: '如：费用原因/老人拒绝/认为不需要/暂不具备施工条件等',
+        inputValidator: (v) => (v && v.trim() ? true : '必须填写拒绝原因'),
+        type: 'warning'
+      }
+    )
+    removalReasons[row.id] = value.trim()
+    row.status = 'REMOVED'
+    ElMessage.success('已标记删除，原因已记录，签字确认后生效')
+  } catch {
+    // 家属取消，保留项目
+  }
+}
+function riskBasis(row) {
+  if (row.category === '紧急呼叫') return '突发意外呼救'
+  if (row.category === '坐便') return '如厕转移安全'
+  if (row.category === '床边护栏') return '床边起身防跌'
+  return '跌倒防护'
 }
 function undoRemove(row) {
+  delete removalReasons[row.id]
   row.status = row.id < 1000000 ? 'PROPOSED' : 'ADDED'
 }
 function addItem() {
@@ -236,14 +294,17 @@ async function familyConfirm() {
   )
   loading.value = true
   try {
-    const removedItemIds = items.value.filter((i) => i.status === 'REMOVED' && i.id > 0).map((i) => i.id)
+    // 已持久化项目（id>0）被删除时提交拒绝原因；本页新增后又删除的（负id）直接丢弃
+    const removals = items.value
+      .filter((i) => i.status === 'REMOVED' && i.id > 0)
+      .map((i) => ({ itemId: i.id, familyReason: removalReasons[i.id] || '' }))
     const addedItems = items.value.filter((i) => i._new && i.status !== 'REMOVED')
       .map(({ category, name, reason, spec, unit, quantity, unitPrice, constructionImpact }) => ({
         category, name, reason, spec, unit, quantity, unitPrice, constructionImpact
       }))
     await api.post(`/applications/${props.app.id}/plan/family-confirm`, {
       signer: signer.value || undefined,
-      removedItemIds,
+      removals,
       addedItems
     })
     ElMessage.success('方案已确认并提交社区复核')
@@ -323,5 +384,18 @@ async function community(approved) {
 }
 :deep(.removed-row) {
   background: #faf7f2 !important;
+}
+.rejections {
+  margin-top: 16px;
+  padding-top: 6px;
+  border-top: 1px dashed #d8dedb;
+}
+.assessor-note {
+  font-size: 13px;
+  color: #44504b;
+}
+.family-reason {
+  font-size: 13px;
+  color: #c4561e;
 }
 </style>

@@ -7,6 +7,10 @@
         <el-tag :type="STATUS_TYPE[app.status]" size="large" style="margin-left:10px">
           {{ labels[app.status] || app.status }}
         </el-tag>
+        <el-tag v-if="riskLevel" :type="riskLevel === '高' ? 'danger' : riskLevel === '中' ? 'warning' : 'success'"
+                effect="dark" size="large" style="margin-left:8px">
+          {{ riskLevel }}风险
+        </el-tag>
       </div>
       <div class="addr">
         <el-icon><Location /></el-icon>{{ app.address }} ｜ 家属电话：{{ app.phone }}
@@ -30,7 +34,8 @@ import { STATUS_TYPE } from '../store'
 
 const props = defineProps({
   app: { type: Object, required: true },
-  labels: { type: Object, default: () => ({}) }
+  labels: { type: Object, default: () => ({}) },
+  riskLevel: { type: String, default: '' }
 })
 
 const STEP_LABELS = ['提交申请', '社区核验', '派单评估', '入户评估', '方案确认', '补贴复核', '接单排期', '施工/变更', '竣工验收', '街道审核', '质保回访']

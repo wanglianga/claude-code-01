@@ -3,6 +3,7 @@ package com.eldercare.bootstrap;
 import com.eldercare.domain.*;
 import com.eldercare.repo.*;
 import com.eldercare.service.PlanGenerator;
+import com.eldercare.service.RiskService;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -31,6 +32,7 @@ public class DataSeeder implements CommandLineRunner {
     private final SettlementRepository settlements;
     private final WarrantyVisitRepository visits;
     private final WorkflowLogRepository logs;
+    private final PlanItemRejectionRepository rejections;
     private final PasswordEncoder encoder;
 
     public DataSeeder(UserRepository users, ApplicationRepository applications,
@@ -39,7 +41,7 @@ public class DataSeeder implements CommandLineRunner {
                       ConstructionChangeRepository changes, CompletionRepository completions,
                       SubsidyReviewRepository reviews, SettlementRepository settlements,
                       WarrantyVisitRepository visits, WorkflowLogRepository logs,
-                      PasswordEncoder encoder) {
+                      PlanItemRejectionRepository rejections, PasswordEncoder encoder) {
         this.users = users;
         this.applications = applications;
         this.assessments = assessments;
@@ -52,6 +54,7 @@ public class DataSeeder implements CommandLineRunner {
         this.settlements = settlements;
         this.visits = visits;
         this.logs = logs;
+        this.rejections = rejections;
         this.encoder = encoder;
     }
 
@@ -122,10 +125,23 @@ public class DataSeeder implements CommandLineRunner {
         // 5. 家属已确认（增删过项目），待社区复核
         Application a5 = assessedApp(family2, community, assessor, "周福海", 81,
                 "PLAN_FAMILY_CONFIRMED", "高", null);
-        // 家属删除淋浴防滑垫，新增“其他”类项目（默认补贴 0，等社区核定）
+        // 家属拒绝了高风险相关的紧急呼叫项目：保留评估师说明与家属拒绝原因，街道审核可查
         List<PlanItem> items5 = planItems.findByApplicationId(a5.getId());
-        items5.stream().filter(i -> i.getName().contains("防滑垫")).findFirst()
-                .ifPresent(i -> i.setStatus("REMOVED"));
+        PlanItem rejected = items5.stream()
+                .filter(i -> i.getName().contains("紧急呼叫")).findFirst()
+                .orElseGet(() -> items5.get(0));
+        rejected.setStatus("REMOVED");
+        planItems.save(rejected);
+        PlanItemRejection rejection = new PlanItemRejection();
+        rejection.setApplicationId(a5.getId());
+        rejection.setPlanItemId(rejected.getId());
+        rejection.setItemName(rejected.getName());
+        rejection.setCategory(rejected.getCategory());
+        rejection.setAssessorNote(rejected.getReason());
+        rejection.setFamilyReason("老人抵触电子设备、不愿随身佩戴；家属认为与对门邻居关系好，白天可相互照应，暂不安装");
+        rejection.setRiskLevel("高");
+        rejections.save(rejection);
+        // 家属同时新增“其他”类项目（默认补贴 0，等社区核定）
         PlanItem added = new PlanItem();
         added.setApplicationId(a5.getId());
         added.setCategory("其他");
@@ -139,14 +155,13 @@ public class DataSeeder implements CommandLineRunner {
         added.setConstructionImpact("现场量尺后安装，无噪音");
         added.setStatus("ADDED");
         planItems.save(added);
-        items5.stream().filter(i -> !"REMOVED".equals(i.getStatus())).forEach(planItems::save);
         PlanGenerator.Cost c5 = PlanGenerator.calc(
                 planItems.findByApplicationIdAndStatusNot(a5.getId(), "REMOVED"));
         PlanConfirmation pc5 = confirmation(a5.getId(), 1, c5, true);
         pc5.setFamilySigner("周福海之子 周明");
         confirmations.save(pc5);
         timeline(a5, "家属确认方案（第1轮）", "PLAN_REVIEW", "PLAN_FAMILY_CONFIRMED", family2,
-                "删除淋浴防滑垫1项，新增厨房防撞处理1项，待社区重新核定补贴");
+                "高风险家庭拒绝紧急呼叫1项（原因已登记，街道审核可查），新增厨房防撞处理1项，待社区重新核定补贴");
 
         // 6. 方案核准，待施工队接单
         Application a6 = assessedApp(family1, community, assessor, "吴兰英", 78,
@@ -256,9 +271,14 @@ public class DataSeeder implements CommandLineRunner {
         a.setNightLighting("昏暗");
         a.setBedTransferDifficulty("床高偏低，老人上肢力量弱，独立起身需 20 秒以上");
         a.setTrialActions("坐位→站立需扶持；行走 5 米需中途停顿；试蹲无法自主起立");
-        a.setFallRiskLevel(risk);
-        a.setSummary("综合跌倒史、行动能力与现场环境，跌倒风险" + risk
-                + "；建议优先卫生间与床边改造、完善夜间动线照明与呼叫。");
+        // 五维度现场记录
+        a.setMobilityObserved("高".equals(risk) ? "轮椅" : "需搀扶");
+        a.setWetness("高".equals(risk) ? "积水" : "较湿");
+        a.setBedDifficultyScore("高".equals(risk) ? 3 : 2);
+        a.setEmergencyCondition("高".equals(risk) ? "独居，无手机，邻居距离远，无法自主呼叫" : "有手机但常忘带");
+        applyRisk(app, a);
+        a.setSummary("五维度综合评分 " + a.getRiskScore() + "/15，平台判定风险【" + risk
+                + "】；建议优先卫生间与床边改造、完善夜间动线照明与呼叫。");
         a.setAssessedAt(LocalDateTime.now().minusDays(4));
         assessments.save(a);
 
@@ -269,7 +289,9 @@ public class DataSeeder implements CommandLineRunner {
         timeline(app, "社区核验通过", "SUBMITTED", "VERIFIED", community, null);
         timeline(app, "派单评估", "VERIFIED", "ASSIGNED", community, "派单给评估师李智固");
         timeline(app, "入户评估完成", "ASSIGNED", "PLAN_REVIEW", assessor,
-                "系统生成 " + generated.size() + " 项改造建议，跌倒风险：" + risk);
+                "五维度评分 " + a.getRiskScore() + "/15，风险等级【" + risk + "】，生成 "
+                        + generated.size() + " 项改造建议"
+                        + ("高".equals(risk) ? "；高风险将优先排期并安排施工陪同/临时照护" : ""));
         return app;
     }
 
@@ -297,9 +319,18 @@ public class DataSeeder implements CommandLineRunner {
         s.setMaterialArrival("扶手、坐便、防滑剂已到社区暂存点，夜灯随车携带");
         s.setElderSchedule("老人午休 12:30-14:30，期间仅安排无噪音工序");
         s.setNoiseRestriction("邻里要求电锤作业限 9:00-11:30、15:00-17:30");
+        if ("高".equals(risk)) {
+            s.setPriority(1);
+            s.setCareRequired("COMPANION");
+            s.setCareArrangement("高风险优先排期；施工两天由家属轮班全程陪同，坐便拆改当天联系社区日间照护中心临时照护，联系电话已同步施工群");
+        } else {
+            s.setPriority(0);
+            s.setCareRequired("NONE");
+        }
         schedules.save(s);
         timeline(app, "施工队接单排期", "PLAN_APPROVED", "SCHEDULED", team,
-                "结合楼栋通行、电梯、材料、老人作息与噪音限制排期");
+                ("高".equals(risk) ? "高风险家庭【优先排期】，已落实施工陪同/临时照护安排；" : "")
+                        + "结合楼栋通行、电梯、材料、老人作息与噪音限制排期");
 
         if (!"PLAN_APPROVED".equals(status) && !"SCHEDULED".equals(status)) {
             app.setStatus("IN_CONSTRUCTION");
@@ -339,8 +370,13 @@ public class DataSeeder implements CommandLineRunner {
         a.setNightLighting("昏暗");
         a.setBedTransferDifficulty("起身困难需搀扶");
         a.setTrialActions("扶持下可短距离行走");
-        a.setFallRiskLevel(risk);
-        a.setSummary("评估结论：建议卫生间与床边适老化改造、加装夜灯与呼叫装置。");
+        a.setMobilityObserved("高".equals(risk) ? "轮椅" : "拄拐");
+        a.setWetness("高".equals(risk) ? "较湿" : "一般");
+        a.setBedDifficultyScore("高".equals(risk) ? 3 : 1);
+        a.setEmergencyCondition("高".equals(risk) ? "独居，老人不会用智能手机，紧急情况下只能敲邻居门" : "有子女同住，配老人机");
+        applyRisk(app, a);
+        a.setSummary("五维度综合评分 " + a.getRiskScore() + "/15，平台判定风险【" + risk
+                + "】；建议卫生间与床边适老化改造、加装夜灯与呼叫装置。");
         a.setAssessedAt(LocalDateTime.now().minusDays(6));
         assessments.save(a);
 
@@ -397,9 +433,22 @@ public class DataSeeder implements CommandLineRunner {
                 "核准补贴 " + subsidy + " 元，已回写施工队结算");
     }
 
+    /** 用平台统一评分引擎回填五维度分值/总分/等级/风险因子/照护建议 */
+    private void applyRisk(Application app, Assessment a) {
+        RiskService.RiskResult r = RiskService.evaluate(app, a);
+        a.setMobilityScore(r.mobility());
+        a.setWetnessScore(r.wetness());
+        a.setBedDifficultyScore(r.bed());
+        a.setLightingScore(r.lighting());
+        a.setEmergencyScore(r.emergency());
+        a.setRiskScore(r.total());
+        a.setFallRiskLevel(r.level());
+        a.setRiskFactors(String.join("；", r.factors()));
+        a.setCareRecommendation(r.careRecommendation());
+    }
+
     private PlanConfirmation confirmation(Long appId, int round, PlanGenerator.Cost c,
-                                           Boolean family) {
-        PlanConfirmation pc = new PlanConfirmation();
+                                           Boolean family) {        PlanConfirmation pc = new PlanConfirmation();
         pc.setApplicationId(appId);
         pc.setRoundNo(round);
         pc.setTotalCost(c.total());

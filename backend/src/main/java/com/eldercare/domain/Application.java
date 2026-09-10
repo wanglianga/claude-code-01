@@ -63,4 +63,16 @@ public class Application {
     private LocalDateTime createdAt;
     @Column(insertable = false, updatable = false)
     private LocalDateTime updatedAt;
+
+    /** 非持久化：列表查询时附带评估风险等级（高/中/低），用于高风险优先标识 */
+    @Transient
+    private String riskLevel;
+
+    public String getRiskLevel() {
+        return riskLevel;
+    }
+
+    public void setRiskLevel(String riskLevel) {
+        this.riskLevel = riskLevel;
+    }
 }

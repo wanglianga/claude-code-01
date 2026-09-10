@@ -75,11 +75,17 @@ public final class PlanGenerator {
                     "安装于淋浴位侧墙，离地 70-80cm；" + wallFix));
         }
 
-        // 卫生间防滑
-        if (bathing(bathroom, "瓷砖") || bathing(bathroom, "滑") || bathroom.isEmpty()) {
+        // 卫生间防滑（现状描述或现场湿滑分级任一命中即处理）
+        String wet = nz(a.getWetness());
+        boolean wetFloor = wet.contains("积水") || wet.contains("较湿");
+        if (bathing(bathroom, "瓷砖") || bathing(bathroom, "滑") || wetFloor || bathroom.isEmpty()) {
+            String why = wetFloor
+                    ? "现场判定卫生间地面" + wet + "，洗漱后湿滑明显（尺寸 "
+                            + nz(a.getBathroomWidth()) + "×" + nz(a.getBathroomDepth()) + "cm）"
+                    : "卫生间地面为光面瓷砖、洗澡后湿滑（尺寸 "
+                            + nz(a.getBathroomWidth()) + "×" + nz(a.getBathroomDepth()) + "cm）";
             items.add(build(catalog("防滑", "卫生间地面防滑处理（防滑剂）"),
-                    "卫生间地面为光面瓷砖、洗澡后湿滑（尺寸 "
-                            + nz(a.getBathroomWidth()) + "×" + nz(a.getBathroomDepth()) + "cm）",
+                    why,
                     "瓷砖面渗透防滑剂，不砸砖、约半天，基本无噪音"));
         }
         items.add(build(catalog("防滑", "淋浴区防滑垫"),

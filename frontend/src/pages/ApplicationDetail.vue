@@ -7,7 +7,8 @@
     </el-page-header>
 
     <template v-if="d.application">
-      <StatusSteps :app="d.application" :labels="meta.statusLabels" />
+      <StatusSteps :app="d.application" :labels="meta.statusLabels"
+                   :risk-level="d.assessment?.fallRiskLevel || ''" />
 
       <ApplicationInfo :app="d.application" />
 

@@ -27,6 +27,21 @@
           <template #default="{ row }">{{ row.floor }}层{{ row.hasElevator ? '/有梯' : '/无梯' }}</template>
         </el-table-column>
         <el-table-column prop="mobility" label="行动能力" width="90" />
+        <el-table-column label="风险等级" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.riskLevel === '高'" type="danger" effect="dark">高风险</el-tag>
+            <el-tag v-else-if="row.riskLevel === '中'" type="warning">中风险</el-tag>
+            <el-tag v-else-if="row.riskLevel === '低'" type="success" effect="plain">低风险</el-tag>
+            <span v-else style="color:#b7bfbc">待评估</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="auth.role === 'TEAM'" label="排期" width="90">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.riskLevel === '高' && row.status === 'PLAN_APPROVED'" content="高风险家庭，平台要求优先排期">
+              <el-tag type="danger" effect="dark">优先</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="address" label="地址" min-width="210" show-overflow-tooltip />
         <el-table-column prop="phone" label="家属电话" width="130" />
         <el-table-column label="当前状态" width="180">

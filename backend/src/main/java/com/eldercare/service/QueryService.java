@@ -1,13 +1,16 @@
 package com.eldercare.service;
 
 import com.eldercare.domain.Application;
+import com.eldercare.domain.Assessment;
 import com.eldercare.domain.User;
 import com.eldercare.repo.ApplicationRepository;
+import com.eldercare.repo.AssessmentRepository;
 import com.eldercare.repo.UserRepository;
 import com.eldercare.security.AuthUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,10 +20,13 @@ public class QueryService {
 
     private final ApplicationRepository applications;
     private final UserRepository users;
+    private final AssessmentRepository assessments;
 
-    public QueryService(ApplicationRepository applications, UserRepository users) {
+    public QueryService(ApplicationRepository applications, UserRepository users,
+                        AssessmentRepository assessments) {
         this.applications = applications;
         this.users = users;
+        this.assessments = assessments;
     }
 
     @Transactional(readOnly = true)
@@ -31,9 +37,26 @@ public class QueryService {
             default -> applications.findAllByOrderBySubmittedAtDesc(); // 社区/街道/施工队看全部
         };
         if (status != null && !status.isBlank()) {
-            return base.stream().filter(a -> status.equals(a.getStatus())).toList();
+            base = base.stream().filter(a -> status.equals(a.getStatus())).toList();
         }
+        // 列表附带评估风险等级，施工队「待接单」队列高风险优先排期
+        Map<Long, String> riskByApp = new java.util.HashMap<>();
+        for (Assessment a : assessments.findAll()) {
+            riskByApp.put(a.getApplicationId(), a.getFallRiskLevel());
+        }
+        if ("TEAM".equals(me.role())) {
+            Map<Long, String> finalRisk = riskByApp;
+            base = base.stream().sorted(
+                    Comparator.comparingInt((Application a) -> "PLAN_APPROVED".equals(a.getStatus())
+                            ? riskRank(finalRisk.get(a.getId())) : 0).reversed()
+                            .thenComparing(Application::getSubmittedAt)).toList();
+        }
+        base.forEach(a -> a.setRiskLevel(riskByApp.get(a.getId())));
         return base;
+    }
+
+    private int riskRank(String level) {
+        return "高".equals(level) ? 3 : "中".equals(level) ? 2 : level == null ? 0 : 1;
     }
 
     @Transactional(readOnly = true)

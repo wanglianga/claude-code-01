@@ -96,13 +96,21 @@ public class WorkflowController {
 
     // ---------------- 方案确认 / 社区复核 ----------------
 
-    public record FamilyPlanRequest(String signer, List<Long> removedItemIds, List<PlanItem> addedItems) {
+    public record RemovedItemRequest(Long itemId, String familyReason) {
+    }
+
+    public record FamilyPlanRequest(String signer, List<RemovedItemRequest> removals, List<PlanItem> addedItems) {
     }
 
     @PostMapping("/applications/{id}/plan/family-confirm")
     @PreAuthorize("hasRole('FAMILY')")
     public PlanConfirmation familyConfirmPlan(@PathVariable Long id, @RequestBody FamilyPlanRequest req) {
-        return workflow.familyConfirmPlan(id, req.signer(), req.removedItemIds(), req.addedItems());
+        List<com.eldercare.service.WorkflowService.RemovedItem> removals = req.removals() == null
+                ? List.of()
+                : req.removals().stream()
+                        .map(r -> new com.eldercare.service.WorkflowService.RemovedItem(r.itemId(), r.familyReason()))
+                        .toList();
+        return workflow.familyConfirmPlan(id, req.signer(), removals, req.addedItems());
     }
 
     public record CommunityPlanRequest(Boolean approved, String remark, Map<Long, BigDecimal> itemCaps) {

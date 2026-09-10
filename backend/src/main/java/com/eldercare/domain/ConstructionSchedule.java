@@ -32,6 +32,15 @@ public class ConstructionSchedule {
     @Column(length = 512)
     private String remark;
 
+    /** 高风险家庭优先排期：1=优先，0=普通 */
+    @Column(nullable = false)
+    private Integer priority = 0;
+
+    /** 施工期间照护安排: NONE / COMPANION(家属陪同) / TEMP_CARE(临时照护) */
+    private String careRequired;
+    @Column(length = 512)
+    private String careArrangement;
+
     @Column(insertable = false, updatable = false)
     private LocalDateTime createdAt;
 }

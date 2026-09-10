@@ -3,6 +3,9 @@
     <!-- 施工队接单排期 -->
     <template v-if="app.status === 'PLAN_APPROVED' && role === 'TEAM'">
       <div class="section-title" style="margin-top:0">施工队接单 · 上门排期</div>
+      <el-alert v-if="highRisk" type="error" :closable="false" show-icon style="margin-bottom:14px"
+                title="该家庭评估为高风险，平台要求优先排期"
+                :description="d.assessment?.careRecommendation" />
       <el-form :model="s" label-width="130px">
         <el-row :gutter="12">
           <el-col :span="12">
@@ -31,8 +34,23 @@
         <el-form-item label="邻里噪音限制">
           <el-input v-model="s.noiseRestriction" placeholder="如电锤仅限9:00-11:30、15:00-17:30" />
         </el-form-item>
+
+        <div class="sub-title">施工期间安全照护</div>
+        <el-form-item label="陪同/照护安排" :required="highRisk">
+          <el-radio-group v-model="s.careRequired">
+            <el-radio v-for="o in meta.careOptions || []" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="s.careRequired && s.careRequired !== 'NONE'" label="照护安排详情" :required="highRisk">
+          <el-input v-model="s.careArrangement" type="textarea" :rows="2"
+                    :placeholder="highRisk
+                      ? '高风险必填：由谁陪同/照护、关键拆改工序谁在场、临时照护机构与联系人'
+                      : '陪同人、时间段、联系方式（选填）'" />
+        </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="loading" @click="accept">接单并提交排期</el-button>
+          <el-button :type="highRisk ? 'danger' : 'primary'" :loading="loading" @click="accept">
+            {{ highRisk ? '接单（高风险优先排期，确认照护安排）' : '接单并提交排期' }}
+          </el-button>
         </el-form-item>
       </el-form>
     </template>
@@ -41,6 +59,9 @@
     <template v-if="d.schedule && app.status !== 'PLAN_APPROVED'">
       <div class="section-title" style="margin-top:0">
         施工排期
+        <el-tag v-if="d.schedule.priority === 1" type="danger" effect="dark" size="small" style="margin-left:8px">
+          高风险优先排期
+        </el-tag>
         <el-button v-if="role === 'TEAM' && app.status === 'SCHEDULED'" type="primary"
                    size="small" style="margin-left:12px" :loading="loading" @click="start">按排期开工</el-button>
       </div>
@@ -51,6 +72,13 @@
         <el-descriptions-item label="电梯使用" :span="2">{{ d.schedule.elevatorPlan }}</el-descriptions-item>
         <el-descriptions-item label="老人作息" :span="2">{{ d.schedule.elderSchedule }}</el-descriptions-item>
         <el-descriptions-item label="噪音限制" :span="2">{{ d.schedule.noiseRestriction }}</el-descriptions-item>
+        <el-descriptions-item v-if="d.schedule.careRequired && d.schedule.careRequired !== 'NONE'"
+                              label="施工陪同/临时照护" :span="2">
+          <el-tag size="small" type="danger">
+            {{ d.schedule.careRequired === 'TEMP_CARE' ? '临时照护/日间托管' : '家属全程陪同' }}
+          </el-tag>
+          <span style="margin-left:8px">{{ d.schedule.careArrangement }}</span>
+        </el-descriptions-item>
         <el-descriptions-item v-if="d.schedule.remark" label="备注" :span="2">{{ d.schedule.remark }}</el-descriptions-item>
       </el-descriptions>
     </template>
@@ -142,8 +170,12 @@ const s = reactive({
   elevatorPlan: '',
   materialArrival: '主要材料开工前一天送达社区暂存点',
   elderSchedule: '老人午休 12:30-14:30，午休期间仅安排无噪音工序',
-  noiseRestriction: '电锤作业限 9:00-11:30、15:00-17:30'
+  noiseRestriction: '电锤作业限 9:00-11:30、15:00-17:30',
+  careRequired: 'NONE',
+  careArrangement: ''
 })
+
+const highRisk = computed(() => props.d.assessment?.fallRiskLevel === '高')
 
 const cf = reactive({ reasonType: 'WALL_UNDRILLABLE', description: '', costDelta: 0 })
 
@@ -167,6 +199,14 @@ function fmt(t) {
 async function accept() {
   if (!s.scheduledStart || !s.scheduledEnd) {
     ElMessage.warning('请选择计划工期')
+    return
+  }
+  if (highRisk.value && (!s.careRequired || s.careRequired === 'NONE')) {
+    ElMessage.warning('高风险家庭必须选择家属陪同或临时照护安排')
+    return
+  }
+  if (highRisk.value && !s.careArrangement?.trim()) {
+    ElMessage.warning('请填写陪同/临时照护的具体安排')
     return
   }
   loading.value = true
@@ -262,5 +302,12 @@ async function community(c, approved) {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+.sub-title {
+  font-weight: 600;
+  color: #1f3d35;
+  margin: 6px 0 12px;
+  padding-left: 10px;
+  border-left: 3px solid #79b49f;
 }
 </style>

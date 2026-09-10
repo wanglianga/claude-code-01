@@ -18,9 +18,15 @@ public class MetaController {
                 "statusLabels", StatusMeta.LABELS,
                 "changeReasons", StatusMeta.CHANGE_REASONS,
                 "mobility", List.of("独立", "拐杖", "轮椅", "卧床"),
+                "mobilityObserved", List.of("独立", "拄拐", "需搀扶", "轮椅", "卧床"),
+                "wetness", List.of("干燥", "一般", "较湿", "积水"),
                 "wallMaterial", List.of("实心砖墙", "空心砖墙", "轻质隔墙", "瓷砖墙面"),
                 "nightLighting", List.of("充足", "一般", "昏暗"),
                 "ownership", List.of("自有产权", "租赁", "公房", "子女房产"),
+                "careOptions", List.of(
+                        Map.of("value", "NONE", "label", "无需特殊安排"),
+                        Map.of("value", "COMPANION", "label", "家属全程陪同"),
+                        Map.of("value", "TEMP_CARE", "label", "临时照护/日间托管")),
                 "planCategories", List.of("扶手", "防滑", "坐便", "床边护栏", "感应夜灯", "紧急呼叫", "坡道", "其他")
         );
     }
