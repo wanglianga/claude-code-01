@@ -1,0 +1,57 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*secret*
+*token*
+*credential*
+
+# Claude Code and task-local metadata
+.claude/
+CLAUDE.md
+PROMPT.txt
+memory/
+memories/
+**/memory/
+**/memories/
+skill/
+skills/
+**/skill/
+**/skills/
+*_traces/
+*trajectory*
+*qa-report*
+
+# Java, Node, and build output
+target/
+**/target/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.mvn/
+coverage/
+*.class
+*.jar
+*.log
+
+# IDE and OS files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local databases, caches, and temporary files
+*.db
+*.sqlite
+*.sqlite3
+.cache/
+.tmp/
+tmp/
+logs/

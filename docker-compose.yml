@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-eldercare}
+      POSTGRES_USER: ${DB_USER:-eldercare}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-eldercare_pwd}
+      TZ: Asia/Shanghai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-eldercare} -d ${DB_NAME:-eldercare}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # 数据库仅在 compose 内部网络访问，不发布宿主机端口
+
+  backend:
+    build:
+      context: ./backend
+    image: eldercare-backend:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-eldercare}
+      DB_USER: ${DB_USER:-eldercare}
+      DB_PASSWORD: ${DB_PASSWORD:-eldercare_pwd}
+      JWT_SECRET: ${JWT_SECRET:-eldercare-platform-demo-jwt-secret-key-please-change-0123456789}
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    # 后端服务不发布到宿主机，仅由前端 nginx 反代访问
+
+  web:
+    build:
+      context: ./frontend
+    image: eldercare-web:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-web
+    depends_on:
+      - backend
+    ports:
+      - "${CC_PUBLISH_PORT}:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,0 +1,41 @@
+:root {
+  --brand: #2f6f5e;
+  --brand-light: #e8f2ef;
+}
+
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  background: #f4f6f8;
+  color: #2c3338;
+}
+
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 14px;
+  color: #1f3d35;
+}
+
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 18px 0 10px;
+  padding-left: 10px;
+  border-left: 4px solid var(--brand);
+}
+
+.cost-money {
+  color: #c4561e;
+  font-weight: 600;
+}
+
+.el-card {
+  border-radius: 10px;
+}
+
+.large-font {
+  font-size: 15px;
+}
